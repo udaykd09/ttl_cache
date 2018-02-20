@@ -1,11 +1,11 @@
 from flask import Flask, request, Response
 from logging.handlers import RotatingFileHandler
-from expire import ExpirationThread
 import json
 import time
 import logging
 import threading
 import random
+import traceback
 
 app = Flask(__name__)
 
@@ -17,6 +17,7 @@ keys = v + '/keys'
 reset= v + '/reset'
 backup = v + '/backup'
 stop_expire_thread = v + '/expire/stop'
+start_expire_thread = v + '/expire/start'
 resp_typ = 'application/json'
 
 # KEYWORDS
@@ -193,10 +194,25 @@ def stop_expiration():
     :return:
     """
     try:
-        app.expire_thread.stop()
-    except:
+        app.stop_expire.set()
+        app.expire_thread.join()
+    except Exception as e:
+        traceback.print_exc()
         return format_response(BAD_MSG, status=404)
     return format_response("Stopped Expiration thread", status=200)
+
+@app.route(start_expire_thread, methods=['PUT'])
+def start_expiration():
+    """
+    Backup the cache
+    :return:
+    """
+    try:
+        start_expire_thread()
+    except:
+        return format_response(BAD_MSG, status=404)
+    return format_response("Started Expiration thread", status=200)
+
 
 def setup_logging():
     """
@@ -215,7 +231,7 @@ def setup_cache_ds():
     app.keys_to_expire = []
 
 
-def expiration_workflow(percent_workload):
+def expiration_workflow(freq, percent_workload, event):
     """
     For given percent of keys in keys_to_expire dict:
       Pick one random key
@@ -224,20 +240,24 @@ def expiration_workflow(percent_workload):
 
     :param percent_workload:
     """
-    n = len(app.keys_to_expire)
-    app.logger.debug("Current count keys in expiration queue: %s" % n)
-    range = int(n*percent_workload/100)
-    print range, percent_workload
-    for i in xrange(range):
-        key = random.randint(0, n-1)
-        app.logger.debug("Key to check for expiration: %s" % app.keys_to_expire[key])
-        check_if_expired(app.keys_to_expire[key])
+    while not event.isSet():
+        print("Start cleanup, event %s, app_event %s"%(id(app.stop_expire), id(event)))
+        n = len(app.keys_to_expire)
+        app.logger.debug("Current count keys in expiration queue: %s" % n)
+        range = int(n*percent_workload/100)
+        print range, percent_workload
+        for i in xrange(range):
+            key = random.randint(0, n-1)
+            app.logger.debug("Key to check for expiration: %s" % app.keys_to_expire[key])
+            check_if_expired(app.keys_to_expire[key])
+        time.sleep(freq*10)
+        print("Finish cleanup")
 
 
 def start_expire_thread(frequency=1, percent_workload=25):
-    app.expire_thread = ExpirationThread(frequency=frequency)
-    t = threading.Thread(target=app.expire_thread.run, args=(expiration_workflow, percent_workload))
-    t.start()
+    app.stop_expire = threading.Event()
+    app.expire_thread = threading.Thread(target=expiration_workflow, args=(frequency, percent_workload, app.stop_expire))
+    app.expire_thread.start()
 
 if __name__ == '__main__':
     try:
@@ -247,8 +267,6 @@ if __name__ == '__main__':
         setup_cache_ds()
         # 3. Start App
         app.logger.info("Starting Server --> localhost:%s" % port)
-        # 4. Start expiration thread
-        start_expire_thread()
         app.run(port=port, debug=True)
     except Exception:
         print("%s"%Exception.message)

@@ -1,17 +1,20 @@
 import time
+import threading
 
-class ExpirationThread:
-    def __init__(self, frequency=1, start=True):
-        # Run every ..
-        self.frequency = frequency*10
-        self.run_flag = start
 
-    def run(self, func, *args):
-        while self.run_flag:
-            print("Expiration cleanup start")
-            func(*args)
-            print("Expiration cleanup finish")
+class ExpirationThread(threading.Thread):
+    def __init__(self, target=None, name=None, freq=1, args=()):
+        self.__target = target
+        self.__args = args
+        self.exc = None
+        super(ExpirationThread, self).__init__(name=name)
+        self.frequency = freq*10
+        self.stop_req = threading.Event()
+
+    def run(self):
+        while not self.stop_req.isSet():
+            print("Start cleanup")
+            if self.__target:
+                self.__target(*self.__args)
+            print("Finish cleanup")
             time.sleep(self.frequency)
-
-    def stop(self):
-        self.run_flag = False
